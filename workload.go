@@ -43,7 +43,7 @@ func NewWorkloadGenerator(seed int64, maxDuration time.Duration, timeout int32, 
 	}
 }
 
-// Generates a workload for the given patterns. The phases for each function image tag will overlap.
+// Generates a workload for the given patterns.
 func (g *WorkloadGenerator) GenerateWorkload() []TestPhase {
 	workload := []TestPhase{}
 

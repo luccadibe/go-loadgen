@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	go_loadgen "github.com/luccadibe/go-loadgen"
@@ -16,8 +17,17 @@ type endpointRequest struct {
 }
 
 type endpointResponse struct {
-	Counter int32  `json:"counter"`
-	Error   string `json:"error,omitempty"`
+	Latency time.Duration `json:"latency"`
+	Counter int32         `json:"counter"`
+	Error   string        `json:"error,omitempty"`
+}
+
+func (r endpointResponse) CSVHeaders() []string {
+	return []string{"latency", "counter", "error"}
+}
+
+func (r endpointResponse) CSVRecord() []string {
+	return []string{r.Latency.String(), strconv.Itoa(int(r.Counter)), r.Error}
 }
 
 type simpleClient struct{}
@@ -28,17 +38,8 @@ func (d *simpleDataProvider) GetData() endpointRequest {
 	return endpointRequest{Delta: 1}
 }
 
-type simpleCollector struct{}
-
-func (c *simpleCollector) Collect(result endpointResponse) {
-	fmt.Println("Collected:	", result.Counter)
-}
-
-func (c *simpleCollector) Close() {
-	fmt.Println("Closing collector")
-}
-
 func (c *simpleClient) CallEndpoint(ctx context.Context, req endpointRequest) endpointResponse {
+	startTime := time.Now()
 	body, err := json.Marshal(req)
 	if err != nil {
 		return endpointResponse{Error: err.Error()}
@@ -53,13 +54,20 @@ func (c *simpleClient) CallEndpoint(ctx context.Context, req endpointRequest) en
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
 		return endpointResponse{Error: err.Error()}
 	}
+	respBody.Latency = time.Since(startTime)
 	return respBody
 }
 
 func main() {
-	client := &simpleClient{}
 
 	startTime := time.Now()
+
+	collector, err := go_loadgen.NewCSVCollector[endpointResponse]("results.csv", 1*time.Second)
+	if err != nil {
+		fmt.Println("Error creating collector:", err)
+		return
+	}
+	defer collector.Close()
 
 	genericRunner, err := go_loadgen.NewEndpointWorkload(
 		"increment",
@@ -87,9 +95,9 @@ func main() {
 				},
 			},
 		},
-		client,
+		&simpleClient{},
 		&simpleDataProvider{},
-		&simpleCollector{},
+		collector,
 	)
 
 	if err != nil {
@@ -125,9 +133,9 @@ func main() {
 				},
 			},
 		},
-		client,
+		&simpleClient{},
 		&simpleDataProvider{},
-		&simpleCollector{},
+		collector,
 	)
 
 	if err != nil {
