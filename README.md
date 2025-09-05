@@ -17,6 +17,7 @@ I used a lot of k6 in the past for load testing, but when I tried to run longer 
 - Type-safe using go generics
 - Support for constant and variable RPS
 - Support for workload-pattern generation
+- No external dependencies
 
 ## Example
 
