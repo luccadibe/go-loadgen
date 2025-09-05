@@ -40,8 +40,10 @@ type endpointResponse struct {
     Error   string        `json:"error,omitempty"`
 }
 
-// Then, we define our client and data provider. Our client will be used to send the request to the server, it must implement the Client interface.
+// Then, we define our client and data provider. 
+// It must implement the Client interface.
 type myClient struct{}
+
 // CallEndpoint will be called by executors using data (endpointRequest) provided by our data provider.
 func (c *myClient) CallEndpoint(ctx context.Context, req endpointRequest) endpointResponse {
     // We can track the latency of the request
@@ -65,7 +67,8 @@ func (c *myClient) CallEndpoint(ctx context.Context, req endpointRequest) endpoi
 	return respBody
 }
 
-// Our data provider will provide the data to be sent to the server in each request. It must be thread safe.
+// Our data provider will provide the data to be sent to the server in each request. 
+// It must be thread safe.
 type myDataProvider struct{}
 
 func (d *myDataProvider) GetData() endpointRequest {
@@ -73,53 +76,57 @@ func (d *myDataProvider) GetData() endpointRequest {
 	return endpointRequest{Delta: 1}
 }
 
-// Then, we define our collector. For this we can use the CSVCollector. We can also provide a flush interval, which will be used to flush the collector to the disk every flushInterval.
-collector, err := go_loadgen.NewCSVCollector[endpointResponse]("results.csv", 1*time.Second)
-if err != nil {
-    log.Fatalf("Failed to create collector: %v", err)
-}
-defer collector.Close()
+func main() {
+// Then, we define our collector. For this we can use the CSVCollector. 
+// We can also provide a flush interval, which will be used to flush the collector 
+// to the disk every flushInterval.
+	collector, err := go_loadgen.NewCSVCollector[endpointResponse]("results.csv", 1*time.Second)
+	if err != nil {
+		log.Fatalf("Failed to create collector: %v", err)
+	}
+	defer collector.Close()
 
-// With all of this, we can create a new EndpointWorkload.
-ew, err := go_loadgen.NewEndpointWorkload(
-		"increment",
-		&go_loadgen.Config{
-			GenerateWorkload: false,
-			MaxDuration:      20 * time.Second,
-			Timeout:          10,
-			Phases: []go_loadgen.TestPhase{
-				{
-					Name:      "increment",
-                    // constant RPS
-					Type:      "constant",
-					StartTime: 0,
-					Duration:  10 * time.Second,
-					StartRPS:  1,
-					Step:      1,
-				},
-				{
-					Name:      "increment",
-                    // variable RPS. Increments by 10 every second
-					Type:      "variable",
-					StartTime: 10 * time.Second,
-					Duration:  10 * time.Second,
-					StartRPS:  10,
-					EndRPS:    100,
-					Step:      10,
+	// With all of this, we can create a new EndpointWorkload.
+	ew, err := go_loadgen.NewEndpointWorkload(
+			"increment",
+			&go_loadgen.Config{
+				GenerateWorkload: false,
+				MaxDuration:      20 * time.Second,
+				Timeout:          10,
+				Phases: []go_loadgen.TestPhase{
+					{
+						Name:      "increment",
+						// constant RPS
+						Type:      "constant",
+						StartTime: 0,
+						Duration:  10 * time.Second,
+						StartRPS:  1,
+						Step:      1,
+					},
+					{
+						Name:      "increment",
+						// variable RPS. Increments by 10 every second
+						Type:      "variable",
+						StartTime: 10 * time.Second,
+						Duration:  10 * time.Second,
+						StartRPS:  10,
+						EndRPS:    100,
+						Step:      10,
+					},
 				},
 			},
-		},
-		&myClient{},
-		&myDataProvider{},
-		collector,
-	)
+			&myClient{},
+			&myDataProvider{},
+			collector,
+		)
 
-    if err != nil {
-        log.Fatalf("Failed to create endpoint workload: %v", err)
-    }
-    // The workload will run until the max duration is reached or the workload is stopped. All of the results will be collected and written to the CSV file.
-    ew.Run()
-
+		if err != nil {
+			log.Fatalf("Failed to create endpoint workload: %v", err)
+		}
+		// The workload will run until the max duration is reached or the workload is stopped. 
+		// All of the results will be collected and written to the CSV file.
+		ew.Run()
+}
 ```
 
 A simple library like this gives me flexibility to test any service and avoid re writing the same executor code each time.
