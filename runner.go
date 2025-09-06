@@ -20,7 +20,7 @@ func NewEndpointWorkload[C any, R any](name string, config *Config, client Clien
 		if config.Patterns == nil {
 			return nil, errors.New("workload generation is enabled but no patterns provided")
 		}
-		generator := NewWorkloadPatternGenerator(config.Seed, config.MaxDuration, config.Timeout, config.Patterns)
+		generator := NewWorkloadPatternGenerator(config.Seed, config.MaxDuration, config.Patterns)
 		ew.Config.Phases = generator.GenerateWorkload()
 	} else if len(config.Phases) == 0 {
 		return nil, errors.New("workload generation is disabled but no phases provided")
@@ -42,7 +42,6 @@ type Config struct {
 	GenerateWorkload bool                     `yaml:"generate_workload"`
 	Seed             int64                    `yaml:"seed,omitempty"`
 	MaxDuration      time.Duration            `yaml:"max_duration"`
-	Timeout          int32                    `yaml:"timeout"`
 	Patterns         map[string]*PhasePattern `yaml:"patterns"`
 	Phases           []TestPhase              `yaml:"phases,omitempty"`
 }
@@ -85,10 +84,7 @@ func (e *EndpointWorkload[C, R]) Run() {
 	wg := sync.WaitGroup{}
 
 	for _, phase := range e.Config.Phases {
-		wg.Add(1)
-		go func(phase TestPhase) {
-			defer wg.Done()
-
+		wg.Go(func() {
 			// wait for phase start time
 			<-time.After(phase.StartTime)
 			var executor LoadExecutor
@@ -101,7 +97,7 @@ func (e *EndpointWorkload[C, R]) Run() {
 
 			executor.Execute(ctx, phase)
 
-		}(phase)
+		})
 	}
 
 	wg.Wait()

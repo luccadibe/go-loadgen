@@ -11,7 +11,6 @@ type WorkloadPatternGenerator struct {
 	random      *rand.Rand
 	maxDuration time.Duration
 	patterns    map[string]*PhasePattern
-	timeout     int32
 }
 
 // PhasePattern is a template for a workload phase. It is used to generate a workload of TestPhases.
@@ -34,13 +33,12 @@ type IntRange struct {
 	Max int `yaml:"max"`
 }
 
-func NewWorkloadPatternGenerator(seed int64, maxDuration time.Duration, timeout int32, patterns map[string]*PhasePattern) *WorkloadPatternGenerator {
+func NewWorkloadPatternGenerator(seed int64, maxDuration time.Duration, patterns map[string]*PhasePattern) *WorkloadPatternGenerator {
 	return &WorkloadPatternGenerator{
 		seed:        seed,
 		random:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
 		maxDuration: maxDuration,
 		patterns:    patterns,
-		timeout:     timeout,
 	}
 }
 
@@ -86,5 +84,9 @@ func (g *WorkloadPatternGenerator) GenerateWorkload() []TestPhase {
 }
 
 func (g *WorkloadPatternGenerator) getRandInt(min, max int) int {
+	// Ensure min <= max by swapping if necessary
+	if min > max {
+		min, max = max, min
+	}
 	return g.random.IntN(max-min+1) + min
 }

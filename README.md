@@ -92,7 +92,6 @@ func main() {
 			&go_loadgen.Config{
 				GenerateWorkload: false,
 				MaxDuration:      20 * time.Second,
-				Timeout:          10,
 				Phases: []go_loadgen.TestPhase{
 					{
 						Name:      "increment",

@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type CSVCollector[R CSVSerializable] struct {
 	flushInterval time.Duration
 	filePath      string
 	headerWritten bool
+	mu            sync.Mutex
 }
 
 // NewCSVCollector creates a new CSV collector and starts a goroutine to flush the collector every flushInterval.
@@ -46,6 +48,9 @@ func NewCSVCollector[R CSVSerializable](filePath string, flushInterval time.Dura
 
 // Collect collects a result and writes it to the CSV file.
 func (c *CSVCollector[R]) Collect(result R) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Write header on first collect
 	if !c.headerWritten {
 		headers := result.CSVHeaders()
@@ -64,6 +69,9 @@ func (c *CSVCollector[R]) Collect(result R) {
 
 // Close flushes the CSV collector and closes the file.
 func (c *CSVCollector[R]) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.writer.Flush()
 	if c.file != nil {
 		c.file.Close()
@@ -73,6 +81,8 @@ func (c *CSVCollector[R]) Close() {
 // RunFlush flushes the CSV collector every flushInterval.
 func (c *CSVCollector[R]) RunFlush() {
 	for range time.NewTicker(c.flushInterval).C {
+		c.mu.Lock()
 		c.writer.Flush()
+		c.mu.Unlock()
 	}
 }
