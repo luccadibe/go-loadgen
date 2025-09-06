@@ -130,3 +130,77 @@ func main() {
 ```
 
 A simple library like this gives me flexibility to test any service and avoid re writing the same executor code each time.
+
+## Workload Pattern Generation
+
+If you want to create more complex workloads with randomized phases, you can use the workload pattern generation feature. 
+This is useful when you want to simulate variable traffic patterns without having to define each phase manually.
+
+```go
+// Using the same client and data provider from the previous example
+func main() {
+	collector, err := go_loadgen.NewCSVCollector[endpointResponse]("results.csv", 1*time.Second)
+	if err != nil {
+		log.Fatalf("Failed to create collector: %v", err)
+	}
+	defer collector.Close()
+
+	// Create a workload with pattern generation enabled
+	ew, err := go_loadgen.NewEndpointWorkload(
+		"increment",
+		&go_loadgen.Config{
+			// Enable workload generation
+			GenerateWorkload: true,
+			MaxDuration:      60 * time.Second,
+			Timeout:          10,
+			// Define patterns instead of specific phases
+			Patterns: map[string]*go_loadgen.PhasePattern{
+				"increment": {
+					Endpoint:           "increment",
+					// Generate between 3 and 8 phases
+					PhaseCount:         go_loadgen.IntRange{Min: 3, Max: 8},
+					// 60% chance of constant RPS phases
+					ConstantLikelihood: 0.6,
+					// 40% chance of variable RPS phases
+					RampingLikelihood:  0.4,
+					Parameters: go_loadgen.PhaseParameters{
+						// Start RPS between 5 and 20
+						StartRPS: go_loadgen.IntRange{Min: 5, Max: 20},
+						// End RPS between 30 and 100
+						EndRPS:   go_loadgen.IntRange{Min: 30, Max: 100},
+						// Step size between 1 and 5
+						Step:     go_loadgen.IntRange{Min: 1, Max: 5},
+					},
+				},
+			},
+		},
+		&myClient{},
+		&myDataProvider{},
+		collector,
+	)
+
+	if err != nil {
+		log.Fatalf("Failed to create endpoint workload: %v", err)
+	}
+
+	// The generator will create a randomized workload based on your patterns
+	// Each run will produce different phases within your specified parameters
+	ew.Run()
+}
+```
+
+If you want to run the examples, you can use the justfile:
+
+```bash
+just run-example http server
+# in another terminal
+just run-example http client
+```
+
+## Contributing
+This is my first public library, so any feedback or contribution is welcome.
+Please feel free to open an issue or submit a pull request.
+
+## License
+
+Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

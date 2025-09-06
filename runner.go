@@ -20,7 +20,7 @@ func NewEndpointWorkload[C any, R any](name string, config *Config, client Clien
 		if config.Patterns == nil {
 			return nil, errors.New("workload generation is enabled but no patterns provided")
 		}
-		generator := NewWorkloadGenerator(config.Seed, config.MaxDuration, config.Timeout, config.Patterns)
+		generator := NewWorkloadPatternGenerator(config.Seed, config.MaxDuration, config.Timeout, config.Patterns)
 		ew.Config.Phases = generator.GenerateWorkload()
 	} else if len(config.Phases) == 0 {
 		return nil, errors.New("workload generation is disabled but no phases provided")
