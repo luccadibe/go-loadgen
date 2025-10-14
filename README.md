@@ -5,6 +5,11 @@ It is based on a simple API : to test a service, you need to define a client, a 
 Go Loadgen then takes care of executing the workload and collecting the results.
 It also provides a simple workload-pattern generator that can generate a workload based on a configuration if you want to create a workload with many different phases which have different RPS.
 
+## Use it in your project
+```bash
+go get github.com/luccadibe/go-loadgen
+```
+
 ## Motivation
 
 I used a lot of k6 in the past for load testing, but when I tried to run longer workloads, the resource usage was too high, and it felt like a waste, especially because I didn't need all of the features that k6 provides.
