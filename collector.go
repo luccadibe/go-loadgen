@@ -1,6 +1,7 @@
 package go_loadgen
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -24,6 +25,8 @@ type CSVCollector[R CSVSerializable] struct {
 	filePath      string
 	headerWritten bool
 	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // NewCSVCollector creates a new CSV collector and starts a goroutine to flush the collector every flushInterval.
@@ -40,8 +43,10 @@ func NewCSVCollector[R CSVSerializable](filePath string, flushInterval time.Dura
 		filePath:      filePath,
 		headerWritten: false,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.ctx, c.cancel = ctx, cancel
 
-	go c.RunFlush()
+	go c.RunFlush(ctx)
 
 	return c, nil
 }
@@ -72,6 +77,7 @@ func (c *CSVCollector[R]) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.cancel()
 	c.writer.Flush()
 	if c.file != nil {
 		c.file.Close()
@@ -79,10 +85,16 @@ func (c *CSVCollector[R]) Close() {
 }
 
 // RunFlush flushes the CSV collector every flushInterval.
-func (c *CSVCollector[R]) RunFlush() {
-	for range time.NewTicker(c.flushInterval).C {
-		c.mu.Lock()
-		c.writer.Flush()
-		c.mu.Unlock()
+func (c *CSVCollector[R]) RunFlush(ctx context.Context) {
+	t := time.NewTicker(c.flushInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.mu.Lock()
+			c.writer.Flush()
+			c.mu.Unlock()
+		}
 	}
 }
