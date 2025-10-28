@@ -21,7 +21,11 @@ func NewEndpointWorkload[C any, R any](name string, config *Config, client Clien
 			return nil, errors.New("workload generation is enabled but no patterns provided")
 		}
 		generator := NewWorkloadPatternGenerator(config.Seed, config.MaxDuration, config.Patterns)
-		ew.Config.Phases = generator.GenerateWorkload()
+		phases, err := generator.GenerateWorkload()
+		if err != nil {
+			return nil, err
+		}
+		ew.Config.Phases = phases
 	} else if len(config.Phases) == 0 {
 		return nil, errors.New("workload generation is disabled but no phases provided")
 	}
@@ -39,22 +43,28 @@ type EndpointWorkload[C any, R any] struct {
 }
 
 type Config struct {
-	GenerateWorkload bool                     `yaml:"generate_workload"`
-	Seed             int64                    `yaml:"seed,omitempty"`
-	MaxDuration      time.Duration            `yaml:"max_duration"`
-	Patterns         map[string]*PhasePattern `yaml:"patterns"`
-	Phases           []TestPhase              `yaml:"phases,omitempty"`
+	GenerateWorkload bool            `yaml:"generate_workload"`
+	Seed             int64           `yaml:"seed,omitempty"`
+	MaxDuration      time.Duration   `yaml:"max_duration"`
+	Patterns         []*PhasePattern `yaml:"patterns"`
+	Phases           []TestPhase     `yaml:"phases,omitempty"`
 }
 
 type TestPhase struct {
-	Name      string        `yaml:"name"`
-	Type      string        `yaml:"type"`       // "constant" | "variable"
-	StartTime time.Duration `yaml:"start_time"` // Relative to workload start
-	Duration  time.Duration `yaml:"duration"`
-	StartRPS  int           `yaml:"start_rps"`
-	EndRPS    int           `yaml:"end_rps,omitempty"`
-	Step      int           `yaml:"step,omitempty"` // For ramping increment/decrement
-	Endpoint  string        `yaml:"endpoint"`
+	Name string `yaml:"name"`
+	// "constant" | "variable"
+	Type string `yaml:"type"`
+	// Starting time of the phase, relative to workload start
+	StartTime time.Duration `yaml:"start_time"`
+	// Total duration of the phase
+	Duration time.Duration `yaml:"duration"`
+	// Starting RPS for the phase. If constant, this is also the constant RPS.
+	StartRPS int `yaml:"start_rps"`
+	// Maximum end RPS for the phase, which may not be reached if max duration is reached
+	// or step is too small.
+	EndRPS int `yaml:"end_rps,omitempty"`
+	// Step increment for the RPS. If variable, this is the increment per second.
+	Step int `yaml:"step,omitempty"`
 }
 
 // A Client is a generic interface that can be used to call an endpoint.
@@ -101,6 +111,4 @@ func (e *EndpointWorkload[C, R]) Run() {
 	}
 
 	wg.Wait()
-
-	e.Collector.Close()
 }

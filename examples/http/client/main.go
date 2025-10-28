@@ -117,9 +117,9 @@ func main() {
 		&go_loadgen.Config{
 			GenerateWorkload: true,
 			MaxDuration:      20 * time.Second,
-			Patterns: map[string]*go_loadgen.PhasePattern{
-				"/increment": {
-					Endpoint:           "/increment",
+			Patterns: []*go_loadgen.PhasePattern{
+				{
+					Name:               "/increment",
 					PhaseCount:         go_loadgen.IntRange{Min: 1, Max: 10},
 					ConstantLikelihood: 0.5,
 					RampingLikelihood:  0.5,

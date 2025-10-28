@@ -1,6 +1,7 @@
 package go_loadgen
 
 import (
+	"errors"
 	"math/rand/v2"
 	"strconv"
 	"time"
@@ -10,16 +11,22 @@ type WorkloadPatternGenerator struct {
 	seed        int64
 	random      *rand.Rand
 	maxDuration time.Duration
-	patterns    map[string]*PhasePattern
+	patterns    []*PhasePattern
 }
 
 // PhasePattern is a template for a workload phase. It is used to generate a workload of TestPhases.
 type PhasePattern struct {
-	Endpoint           string          `yaml:"endpoint"`
-	PhaseCount         IntRange        `yaml:"phase_count"`
-	ConstantLikelihood float64         `yaml:"constant_likelihood"` // 0.0-1.0
-	RampingLikelihood  float64         `yaml:"ramping_likelihood"`  // 0.0-1.0
-	Parameters         PhaseParameters `yaml:"parameters"`
+	Name               string   `yaml:"name"`
+	PhaseCount         IntRange `yaml:"phase_count"`
+	ConstantLikelihood float64  `yaml:"constant_likelihood"` // 0.0-1.0
+	RampingLikelihood  float64  `yaml:"ramping_likelihood"`  // 0.0-1.0
+	// What percentage of the total workload time this pattern should take up. 0.0-1.0
+	// Note: all patterns must sum to 1.0. If not provided, all patterns will be weighted equally.
+	Weight float64 `yaml:"weight"`
+	// Knobs to affect the generated workload phase
+	Parameters PhaseParameters `yaml:"parameters"`
+	// how much time this patter will take up
+	totalTime time.Duration
 }
 
 type PhaseParameters struct {
@@ -33,7 +40,7 @@ type IntRange struct {
 	Max int `yaml:"max"`
 }
 
-func NewWorkloadPatternGenerator(seed int64, maxDuration time.Duration, patterns map[string]*PhasePattern) *WorkloadPatternGenerator {
+func NewWorkloadPatternGenerator(seed int64, maxDuration time.Duration, patterns []*PhasePattern) *WorkloadPatternGenerator {
 	return &WorkloadPatternGenerator{
 		seed:        seed,
 		random:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
@@ -43,21 +50,23 @@ func NewWorkloadPatternGenerator(seed int64, maxDuration time.Duration, patterns
 }
 
 // Generates a workload for the given patterns.
-func (g *WorkloadPatternGenerator) GenerateWorkload() []TestPhase {
+func (g *WorkloadPatternGenerator) GenerateWorkload() ([]TestPhase, error) {
 	workload := []TestPhase{}
 
-	times := make(map[string]time.Duration)
-	for _, pattern := range g.patterns {
-		times[pattern.Endpoint] = time.Duration(0)
+	currentTime := time.Duration(0)
+
+	// calculate times for each pattern
+	if err := g.calculatePatternTimes(); err != nil {
+		return nil, err
 	}
 
 	for _, pattern := range g.patterns {
 		phaseCount := g.getRandInt(pattern.PhaseCount.Min, pattern.PhaseCount.Max)
-		phaseDuration := g.maxDuration / time.Duration(phaseCount)
+		phaseDuration := pattern.totalTime / time.Duration(phaseCount)
 
 		for i := 0; i < phaseCount; i++ {
-			phaseStartTime := times[pattern.Endpoint]
-			times[pattern.Endpoint] += phaseDuration
+			phaseStartTime := currentTime
+			currentTime += phaseDuration
 			c := g.random.Float64()
 			var phaseType string
 			if c < pattern.ConstantLikelihood {
@@ -67,8 +76,7 @@ func (g *WorkloadPatternGenerator) GenerateWorkload() []TestPhase {
 			}
 
 			phase := TestPhase{
-				Name:      pattern.Endpoint + "_" + strconv.Itoa(i),
-				Endpoint:  pattern.Endpoint,
+				Name:      pattern.Name + "_" + strconv.Itoa(i),
 				Type:      phaseType,
 				StartTime: phaseStartTime,
 				Duration:  phaseDuration,
@@ -80,7 +88,7 @@ func (g *WorkloadPatternGenerator) GenerateWorkload() []TestPhase {
 		}
 	}
 
-	return workload
+	return workload, nil
 }
 
 func (g *WorkloadPatternGenerator) getRandInt(min, max int) int {
@@ -89,4 +97,30 @@ func (g *WorkloadPatternGenerator) getRandInt(min, max int) int {
 		min, max = max, min
 	}
 	return g.random.IntN(max-min+1) + min
+}
+
+func (g *WorkloadPatternGenerator) calculatePatternTimes() error {
+	if len(g.patterns) == 0 {
+		return nil
+	}
+
+	total := 0.0
+	for _, pattern := range g.patterns {
+		total += pattern.Weight
+	}
+	// Not provided, split workload evenly between all patterns
+	if total == 0.0 {
+		equalTime := g.maxDuration / time.Duration(len(g.patterns))
+		for _, pattern := range g.patterns {
+			pattern.totalTime = equalTime
+		}
+		return nil
+	}
+	if total != 1.0 {
+		return errors.New("pattern weights must sum to 1.0")
+	}
+	for _, pattern := range g.patterns {
+		pattern.totalTime = time.Duration(float64(g.maxDuration) * pattern.Weight)
+	}
+	return nil
 }

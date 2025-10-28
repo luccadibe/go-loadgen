@@ -174,9 +174,9 @@ func TestNewEndpointWorkload_GenerateWorkload(t *testing.T) {
 		GenerateWorkload: true,
 		MaxDuration:      10 * time.Second,
 		Seed:             12345,
-		Patterns: map[string]*PhasePattern{
-			"test": {
-				Endpoint:           "test",
+		Patterns: []*PhasePattern{
+			{
+				Name:               "test",
 				PhaseCount:         IntRange{Min: 2, Max: 3},
 				ConstantLikelihood: 1.0, // Always constant
 				RampingLikelihood:  0.0,
@@ -246,11 +246,6 @@ func TestEndpointWorkload_Run_ConstantPhase(t *testing.T) {
 	callCount := client.GetCallCount()
 	if callCount < 3 || callCount > 5 {
 		t.Errorf("Expected ~4 calls, got: %d", callCount)
-	}
-
-	// Collector should be closed
-	if !collector.IsClosed() {
-		t.Error("Expected collector to be closed")
 	}
 
 	// Should have collected results

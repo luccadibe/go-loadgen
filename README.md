@@ -21,7 +21,7 @@ I used a lot of k6 in the past for load testing, but when I tried to run longer 
 - Protocol-agnostic
 - Type-safe using go generics
 - Support for constant and variable RPS
-- Support for workload-pattern generation
+- Support for workload-pattern generation with weighted time allocation
 - No external dependencies
 
 ## Example
@@ -147,6 +147,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create collector: %v", err)
 	}
+	// Don't forget to close the collector when you're done
 	defer collector.Close()
 
 	// Create a workload with pattern generation enabled
@@ -158,15 +159,17 @@ func main() {
 			MaxDuration:      60 * time.Second,
 			Timeout:          10,
 			// Define patterns instead of specific phases
-			Patterns: map[string]*go_loadgen.PhasePattern{
-				"increment": {
-					Endpoint:           "increment",
+			Patterns: []*go_loadgen.PhasePattern{
+				{
+					Name:               "increment",
 					// Generate between 3 and 8 phases
 					PhaseCount:         go_loadgen.IntRange{Min: 3, Max: 8},
 					// 60% chance of constant RPS phases
 					ConstantLikelihood: 0.6,
 					// 40% chance of variable RPS phases
 					RampingLikelihood:  0.4,
+					// This pattern takes up 100% of the workload time (default behavior)
+					Weight: 1.0,
 					Parameters: go_loadgen.PhaseParameters{
 						// Start RPS between 5 and 20
 						StartRPS: go_loadgen.IntRange{Min: 5, Max: 20},
@@ -192,6 +195,45 @@ func main() {
 	ew.Run()
 }
 ```
+
+## Pattern Weighting
+
+You can control how much time each pattern takes up in your workload using the `Weight` field. 
+Weights must sum to 1.0, or if not specified (or all set to 0.0), patterns will be weighted equally.
+
+```go
+Patterns: []*go_loadgen.PhasePattern{
+	{
+		Name:               "heavy_load",
+		Weight:              0.7, // 70% of total workload time
+		PhaseCount:          go_loadgen.IntRange{Min: 2, Max: 4},
+		ConstantLikelihood:  0.8,
+		RampingLikelihood:   0.2,
+		Parameters: go_loadgen.PhaseParameters{
+			StartRPS: go_loadgen.IntRange{Min: 10, Max: 50},
+			EndRPS:   go_loadgen.IntRange{Min: 50, Max: 100},
+			Step:     go_loadgen.IntRange{Min: 5, Max: 10},
+		},
+	},
+	{
+		Name:               "light_load",
+		Weight:              0.3, // 30% of total workload time
+		PhaseCount:          go_loadgen.IntRange{Min: 1, Max: 2},
+		ConstantLikelihood:  1.0,
+		RampingLikelihood:   0.0,
+		Parameters: go_loadgen.PhaseParameters{
+			StartRPS: go_loadgen.IntRange{Min: 1, Max: 5},
+			EndRPS:   go_loadgen.IntRange{Min: 5, Max: 10},
+			Step:     go_loadgen.IntRange{Min: 1, Max: 2},
+		},
+	},
+},
+```
+
+This will create a workload where the "heavy_load" pattern takes up 70% of the total time, 
+and "light_load" takes up 30% of the time.
+
+**Note**: Patterns are executed in the order they appear in the slice. The "heavy_load" pattern will always execute before "light_load" in this example.
 
 If you want to run the examples, you can use the justfile:
 

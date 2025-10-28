@@ -19,3 +19,7 @@ bench:
 
 tidy:
     go mod tidy
+
+tag version:
+    git tag -a v{{version}} -m "Release v{{version}}"
+    git push origin v{{version}}

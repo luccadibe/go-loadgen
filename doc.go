@@ -6,6 +6,8 @@ to test a service, you need to define a client, a data provider, and a collector
 Go Loadgen then takes care of executing the workload and collecting the results.
 It also provides a simple workload-pattern generator that can generate a workload based on
 a configuration if you want to create a workload with many different phases which have different RPS.
+The pattern generator supports weighted time allocation, allowing you to control how much time
+each pattern takes up in your workload.
 
 # Motivation
 
@@ -18,7 +20,7 @@ them to disk at the end. This library provides full flexibility to implement you
   - Protocol-agnostic
   - Type-safe using go generics
   - Support for constant and variable RPS
-  - Support for workload-pattern generation
+  - Support for workload-pattern generation with weighted time allocation
 
 # Example
 
