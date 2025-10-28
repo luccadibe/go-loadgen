@@ -87,52 +87,122 @@ func TestWorkloadPatternGenerator_GenerateWorkload_SinglePattern(t *testing.T) {
 }
 
 func TestWorkloadPatternGenerator_GenerateWorkload_MultiplePatterns(t *testing.T) {
-	patterns := []*PhasePattern{
+	type expectedPhase struct {
+		Name      string
+		Duration  time.Duration
+		StartTime time.Duration
+	}
+	tests := []struct {
+		name        string
+		patterns    []*PhasePattern
+		maxDuration time.Duration
+		seed        int64
+		expected    []expectedPhase
+	}{
 		{
-			Name:               "endpoint1",
-			PhaseCount:         IntRange{Min: 1, Max: 1},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 1, Max: 1},
-				EndRPS:   IntRange{Min: 10, Max: 10},
-				Step:     IntRange{Min: 1, Max: 1},
+			name: "two_patterns_one_phase_each",
+			patterns: []*PhasePattern{
+				{
+					Name:               "endpoint1",
+					PhaseCount:         IntRange{Min: 1, Max: 1},
+					ConstantLikelihood: 1.0,
+					RampingLikelihood:  0.0,
+					Parameters: PhaseParameters{
+						StartRPS: IntRange{Min: 1, Max: 1},
+						EndRPS:   IntRange{Min: 10, Max: 10},
+						Step:     IntRange{Min: 1, Max: 1},
+					},
+				},
+				{
+					Name:               "endpoint2",
+					PhaseCount:         IntRange{Min: 1, Max: 1},
+					ConstantLikelihood: 1.0,
+					RampingLikelihood:  0.0,
+					Parameters: PhaseParameters{
+						StartRPS: IntRange{Min: 2, Max: 2},
+						EndRPS:   IntRange{Min: 20, Max: 20},
+						Step:     IntRange{Min: 2, Max: 2},
+					},
+				},
+			},
+			maxDuration: 10 * time.Second,
+			seed:        12345,
+			expected: []expectedPhase{
+				{Name: "endpoint1_0", Duration: 5 * time.Second, StartTime: 0},
+				{Name: "endpoint2_0", Duration: 5 * time.Second, StartTime: 5 * time.Second},
 			},
 		},
 		{
-			Name:               "endpoint2",
-			PhaseCount:         IntRange{Min: 1, Max: 1},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 2, Max: 2},
-				EndRPS:   IntRange{Min: 20, Max: 20},
-				Step:     IntRange{Min: 2, Max: 2},
+			name: "two_patterns_three_phases_each_variable",
+			patterns: []*PhasePattern{
+				{
+					Name:               "endpoint1",
+					PhaseCount:         IntRange{Min: 3, Max: 3},
+					ConstantLikelihood: 0.5,
+					RampingLikelihood:  0.5,
+					Parameters: PhaseParameters{
+						StartRPS: IntRange{Min: 1, Max: 1},
+						EndRPS:   IntRange{Min: 10, Max: 10},
+						Step:     IntRange{Min: 1, Max: 1},
+					},
+				},
+				{
+					Name:               "endpoint2",
+					PhaseCount:         IntRange{Min: 3, Max: 3},
+					ConstantLikelihood: 0.5,
+					RampingLikelihood:  0.5,
+					Parameters: PhaseParameters{
+						StartRPS: IntRange{Min: 2, Max: 2},
+						EndRPS:   IntRange{Min: 20, Max: 20},
+						Step:     IntRange{Min: 2, Max: 2},
+					},
+				},
+			},
+			maxDuration: 30 * time.Second,
+			seed:        12345,
+			expected: []expectedPhase{
+				// we expect 15 seconds each and evenly split between their three phases
+				{Name: "endpoint1_0", Duration: 5 * time.Second, StartTime: 0},
+				{Name: "endpoint1_1", Duration: 5 * time.Second, StartTime: 5 * time.Second},
+				{Name: "endpoint1_2", Duration: 5 * time.Second, StartTime: 10 * time.Second},
+				{Name: "endpoint2_0", Duration: 5 * time.Second, StartTime: 15 * time.Second},
+				{Name: "endpoint2_1", Duration: 5 * time.Second, StartTime: 20 * time.Second},
+				{Name: "endpoint2_2", Duration: 5 * time.Second, StartTime: 25 * time.Second},
 			},
 		},
 	}
 
-	generator := NewWorkloadPatternGenerator(12345, 10*time.Second, patterns)
-	workload, err := generator.GenerateWorkload()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generator := NewWorkloadPatternGenerator(tt.seed, tt.maxDuration, tt.patterns)
+			workload, err := generator.GenerateWorkload()
+			if err != nil {
+				t.Fatalf("Expected no error, got: %v", err)
+			}
 
-	if len(workload) != 2 {
-		t.Errorf("Expected 2 phases (1 per pattern), got: %d", len(workload))
-	}
+			if len(workload) != len(tt.expected) {
+				t.Errorf("Expected %d phases, got: %d", len(tt.expected), len(workload))
+			}
 
-	// Check that we have phases for both endpoints
-	endpoints := make(map[string]bool)
-	for _, phase := range workload {
-		endpoints[phase.Name] = true
-	}
+			actualPhases := make(map[string]TestPhase)
+			for _, phase := range workload {
+				actualPhases[phase.Name] = phase
+			}
 
-	if !endpoints["endpoint1_0"] {
-		t.Error("Expected phase for endpoint1_0")
-	}
-	if !endpoints["endpoint2_0"] {
-		t.Error("Expected phase for endpoint2_0")
+			for _, exp := range tt.expected {
+				phase, ok := actualPhases[exp.Name]
+				if !ok {
+					t.Errorf("Expected phase for %s", exp.Name)
+					continue
+				}
+				if phase.Duration != exp.Duration {
+					t.Errorf("Phase %s expected Duration %v, got: %v", exp.Name, exp.Duration, phase.Duration)
+				}
+				if phase.StartTime != exp.StartTime {
+					t.Errorf("Phase %s expected StartTime %v, got: %v", exp.Name, exp.StartTime, phase.StartTime)
+				}
+			}
+		})
 	}
 }
 
