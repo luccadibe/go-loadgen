@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const MIN_INTERVAL = 10 * time.Millisecond
+
 // A LoadExecutor is a generic interface that can be used to execute a workload of TestPhases.
 type LoadExecutor interface {
 	Execute(ctx context.Context, phase TestPhase)
@@ -39,7 +41,6 @@ type RampingExecutor[C any, R any] struct {
 	startRPS     int
 	endRPS       int
 	step         int
-	duration     time.Duration
 	client       Client[C, R]
 	collector    Collector[R]
 	dataProvider DataProvider[C]
@@ -67,8 +68,9 @@ func (e *ConstantExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 	subCtx, cancel := context.WithTimeout(ctx, phase.Duration)
 	defer cancel()
 
-	t := time.NewTicker(time.Second)
-
+	//t := time.NewTicker(time.Second)
+	interval, restRPS := calculateInterval(e.rps)
+	t := time.NewTicker(interval)
 	for {
 		select {
 		case <-subCtx.Done():
@@ -76,7 +78,7 @@ func (e *ConstantExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 		case <-e.stopChan:
 			return
 		case <-t.C:
-			for i := 0; i < e.rps; i++ {
+			for range restRPS {
 
 				go func() {
 					result := e.client.CallEndpoint(ctx, e.dataProvider.GetData())
@@ -104,30 +106,58 @@ func (e *RampingExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 	subCtx, cancel := context.WithTimeout(ctx, phase.Duration)
 	defer cancel()
 
-	currentRPS := e.startRPS
-	if currentRPS == 0 {
-		currentRPS = 1
+	currentRPS := &e.startRPS
+	if *currentRPS == 0 {
+		*currentRPS = 1
 	}
-
+	// main ticker, used to update the currentRPS
 	t := time.NewTicker(time.Second)
 	first := true
+
+	// sub ticker, used to dispatch requests
+	var interval time.Duration
+	var restRPS int
+	interval, restRPS = calculateInterval(*currentRPS)
+	subt := time.NewTicker(interval)
+
+	// update currentRPS
+
+	go func() {
+		for {
+			select {
+			case <-subCtx.Done():
+				return
+			case <-e.stopChan:
+				return
+			case <-t.C:
+				if !first && (incrementing && *currentRPS < e.endRPS || !incrementing && *currentRPS > e.endRPS) {
+					*currentRPS += e.step
+				}
+
+				if *currentRPS <= 0 {
+					break
+				}
+				first = false
+
+				// update the sub ticker
+				interval, restRPS = calculateInterval(*currentRPS)
+				subt = time.NewTicker(interval)
+
+			}
+		}
+
+	}()
+
+	// dispatch requests
+
 	for {
 		select {
 		case <-subCtx.Done():
 			return
 		case <-e.stopChan:
 			return
-		case <-t.C:
-			if !first && (incrementing && currentRPS < e.endRPS || !incrementing && currentRPS > e.endRPS) {
-				currentRPS += e.step
-			}
-
-			if currentRPS <= 0 {
-				break
-			}
-			first = false
-
-			for i := 0; i < currentRPS; i++ {
+		case <-subt.C:
+			for range restRPS {
 				go func() {
 					result := e.client.CallEndpoint(ctx, e.dataProvider.GetData())
 					e.collector.Collect(result)
@@ -135,10 +165,20 @@ func (e *RampingExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 			}
 		}
 	}
+
 }
 
 // Stop stops the RampingExecutor.
 func (e *RampingExecutor[C, R]) Stop() {
 	e.stopChan <- struct{}{}
 	close(e.stopChan)
+}
+
+func calculateInterval(rps int) (time.Duration, int) {
+	interval := max(time.Second/time.Duration(rps), MIN_INTERVAL)
+	restRPS := rps / int(time.Second/interval)
+
+	//log.Printf("Calculated interval: %v, restRPS: %d", interval, restRPS)
+
+	return interval, restRPS
 }

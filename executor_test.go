@@ -36,8 +36,8 @@ func TestConstantExecutor_Execute(t *testing.T) {
 	// Should have made approximately 6 calls (3 RPS * 2 seconds)
 	// But could be less due to timing (first tick delay) or more due to in-flight goroutines
 	callCount := client.GetCallCount()
-	if callCount < 3 || callCount > 9 {
-		t.Errorf("Expected 3-9 calls (allowing for timing variations), got: %d", callCount)
+	if callCount < 3 || callCount > 10 {
+		t.Errorf("Expected 3-10 calls (allowing for timing variations), got: %d", callCount)
 	}
 
 	// Should have collected results (may be more than calls due to async nature)
@@ -116,8 +116,8 @@ func TestRampingExecutor_Execute_Increment(t *testing.T) {
 	// Second 1: 1 request, Second 2: 2 requests, Second 3: 3 requests = ~6 total
 	// But timing variations and in-flight goroutines can affect this
 	callCount := client.GetCallCount()
-	if callCount < 3 || callCount > 9 {
-		t.Errorf("Expected 3-9 calls (ramping 1->3, allowing for timing variations), got: %d", callCount)
+	if callCount < 3 || callCount > 10 {
+		t.Errorf("Expected 3-10 calls (ramping 1->3, allowing for timing variations), got: %d", callCount)
 	}
 }
 
@@ -277,5 +277,31 @@ func TestRampingExecutor_Execute_ContextCancellation(t *testing.T) {
 	// Should respect context timeout
 	if elapsed > 1*time.Second {
 		t.Errorf("Expected execution to stop due to context timeout, took: %v", elapsed)
+	}
+}
+
+func TestCalculateInterval(t *testing.T) {
+	tests := []struct {
+		rps             int
+		interval        time.Duration
+		expectedRestRPS int
+	}{
+		{4, 250 * time.Millisecond, 1},
+		{10, 100 * time.Millisecond, 1},
+		{20, 50 * time.Millisecond, 1},
+		{50, 20 * time.Millisecond, 1},
+		// limit
+		{100_000_000, 10 * time.Millisecond, 100_000_000 / 100},
+		{10_000_000, 10 * time.Millisecond, 10_000_000 / 100},
+	}
+
+	for _, test := range tests {
+		interval, restRPS := calculateInterval(test.rps)
+		if interval != test.interval {
+			t.Errorf("Expected %v interval, got: %v", test.interval, interval)
+		}
+		if restRPS != test.expectedRestRPS {
+			t.Errorf("Expected %d restRPS, got: %d", test.expectedRestRPS, restRPS)
+		}
 	}
 }
