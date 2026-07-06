@@ -282,26 +282,65 @@ func TestRampingExecutor_Execute_ContextCancellation(t *testing.T) {
 
 func TestCalculateInterval(t *testing.T) {
 	tests := []struct {
-		rps             int
-		interval        time.Duration
-		expectedRestRPS int
+		rps              int
+		expectedInterval time.Duration
 	}{
-		{4, 250 * time.Millisecond, 1},
-		{10, 100 * time.Millisecond, 1},
-		{20, 50 * time.Millisecond, 1},
-		{50, 20 * time.Millisecond, 1},
-		// limit
-		{100_000_000, 10 * time.Millisecond, 100_000_000 / 100},
-		{10_000_000, 10 * time.Millisecond, 10_000_000 / 100},
+		{4, 250 * time.Millisecond},
+		{10, 100 * time.Millisecond},
+		{20, 50 * time.Millisecond},
+		{50, 20 * time.Millisecond},
+		{150, 10 * time.Millisecond},
+		{100_000_000, 10 * time.Millisecond},
+		{10_000_000, 10 * time.Millisecond},
 	}
 
 	for _, test := range tests {
-		interval, restRPS := calculateInterval(test.rps)
-		if interval != test.interval {
-			t.Errorf("Expected %v interval, got: %v", test.interval, interval)
+		interval := calculateInterval(test.rps)
+		if interval != test.expectedInterval {
+			t.Errorf("rps=%d: expected %v interval, got: %v", test.rps, test.expectedInterval, interval)
 		}
-		if restRPS != test.expectedRestRPS {
-			t.Errorf("Expected %d restRPS, got: %d", test.expectedRestRPS, restRPS)
+	}
+}
+
+func TestCalculateInterval_OfferedRPSAbove100Below200(t *testing.T) {
+	tests := []struct {
+		rps           int
+		ticks         int
+		expectedTotal int
+	}{
+		{150, 100, 150},
+		{180, 100, 180},
+		{199, 100, 199},
+	}
+
+	for _, test := range tests {
+		total := offeredRPSOverTicks(test.rps, test.ticks)
+		if total != test.expectedTotal {
+			t.Errorf("rps=%d over %d ticks: expected %d requests, got %d",
+				test.rps, test.ticks, test.expectedTotal, total)
 		}
+	}
+}
+
+func TestConstantExecutor_OfferedRPS150(t *testing.T) {
+	client := &mockClient{}
+	dataProvider := &mockDataProvider{}
+	collector := &mockCollector{}
+
+	executor := NewConstantExecutor(client, collector, dataProvider)
+
+	phase := TestPhase{
+		Name:     "offered-rps-150",
+		Type:     "constant",
+		Duration: 1 * time.Second,
+		StartRPS: 150,
+	}
+
+	ctx := context.Background()
+	executor.Execute(ctx, phase)
+
+	callCount := client.GetCallCount()
+	if callCount < 130 || callCount > 170 {
+		t.Errorf("Expected ~150 calls at 150 RPS for 1s (130-170 tolerance), got: %d", callCount)
 	}
 }

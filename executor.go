@@ -2,6 +2,7 @@ package go_loadgen
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -68,9 +69,9 @@ func (e *ConstantExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 	subCtx, cancel := context.WithTimeout(ctx, phase.Duration)
 	defer cancel()
 
-	//t := time.NewTicker(time.Second)
-	interval, restRPS := calculateInterval(e.rps)
-	t := time.NewTicker(interval)
+	scheduler := newRateScheduler(e.rps)
+	t := time.NewTicker(MIN_INTERVAL)
+	defer t.Stop()
 	for {
 		select {
 		case <-subCtx.Done():
@@ -78,13 +79,11 @@ func (e *ConstantExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 		case <-e.stopChan:
 			return
 		case <-t.C:
-			for range restRPS {
-
+			for range scheduler.requestsThisTick() {
 				go func() {
 					result := e.client.CallEndpoint(ctx, e.dataProvider.GetData())
 					e.collector.Collect(result)
 				}()
-
 			}
 		}
 	}
@@ -114,11 +113,10 @@ func (e *RampingExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 	t := time.NewTicker(time.Second)
 	first := true
 
-	// sub ticker, used to dispatch requests
-	var interval time.Duration
-	var restRPS int
-	interval, restRPS = calculateInterval(*currentRPS)
-	subt := time.NewTicker(interval)
+	// sub ticker, used to dispatch requests at MIN_INTERVAL
+	scheduler := newRateScheduler(*currentRPS)
+	subt := time.NewTicker(MIN_INTERVAL)
+	defer subt.Stop()
 
 	// update currentRPS
 
@@ -139,10 +137,7 @@ func (e *RampingExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 				}
 				first = false
 
-				// update the sub ticker
-				interval, restRPS = calculateInterval(*currentRPS)
-				subt = time.NewTicker(interval)
-
+				scheduler.update(*currentRPS)
 			}
 		}
 
@@ -157,7 +152,7 @@ func (e *RampingExecutor[C, R]) Execute(ctx context.Context, phase TestPhase) {
 		case <-e.stopChan:
 			return
 		case <-subt.C:
-			for range restRPS {
+			for range scheduler.requestsThisTick() {
 				go func() {
 					result := e.client.CallEndpoint(ctx, e.dataProvider.GetData())
 					e.collector.Collect(result)
@@ -174,11 +169,61 @@ func (e *RampingExecutor[C, R]) Stop() {
 	close(e.stopChan)
 }
 
-func calculateInterval(rps int) (time.Duration, int) {
-	interval := max(time.Second/time.Duration(rps), MIN_INTERVAL)
-	restRPS := rps / int(time.Second/interval)
+func calculateInterval(rps int) time.Duration {
+	return max(time.Second/time.Duration(rps), MIN_INTERVAL)
+}
 
-	//log.Printf("Calculated interval: %v, restRPS: %d", interval, restRPS)
+// rateScheduler dispatches requests at the target RPS using fractional-rate
+// accumulation when MIN_INTERVAL caps the tick rate below the target RPS.
+type rateScheduler struct {
+	mu          sync.Mutex
+	rps         int
+	tickEvery   time.Duration
+	ticksPerSec int
+	accumulator int
+}
 
-	return interval, restRPS
+func newRateScheduler(rps int) *rateScheduler {
+	s := &rateScheduler{}
+	s.update(rps)
+	return s
+}
+
+func (s *rateScheduler) update(rps int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.rps = rps
+	s.tickEvery = MIN_INTERVAL
+	s.ticksPerSec = int(time.Second / MIN_INTERVAL)
+	s.accumulator = 0
+}
+
+func (s *rateScheduler) tickInterval() time.Duration {
+	return MIN_INTERVAL
+}
+
+func (s *rateScheduler) requestsThisTick() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.rps <= 0 || s.ticksPerSec <= 0 {
+		return 0
+	}
+
+	s.accumulator += s.rps
+	n := s.accumulator / s.ticksPerSec
+	s.accumulator %= s.ticksPerSec
+	return n
+}
+
+// offeredRPSOverTicks simulates dispatch over n ticks and returns total requests.
+// Used by tests to verify average offered rate without timing-dependent integration tests.
+func offeredRPSOverTicks(rps int, ticks int) int {
+	scheduler := newRateScheduler(rps)
+	total := 0
+	for range ticks {
+		total += scheduler.requestsThisTick()
+	}
+	return total
 }
