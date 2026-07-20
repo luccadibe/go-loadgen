@@ -1,6 +1,9 @@
 package go_loadgen
 
 import (
+	"compress/gzip"
+	"encoding/gob"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -256,4 +259,210 @@ func TestCSVCollector_MultipleClose(t *testing.T) {
 	collector.Close()
 
 	// Should not crash or cause issues
+}
+
+func TestGobCollector_Collect(t *testing.T) {
+	filename := "test_collect.gob"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Failed to create gob collector: %v", err)
+	}
+
+	data := []testCSVData{
+		{ID: 1, Message: "test1", Value: 1.23},
+		{ID: 2, Message: "test2", Value: 4.56},
+	}
+	for _, item := range data {
+		collector.Collect(item)
+	}
+	collector.Close()
+
+	if err := collector.Err(); err != nil {
+		t.Fatalf("Gob collector returned error: %v", err)
+	}
+
+	got := readGobRecords[testCSVData](t, filename, false)
+	if len(got) != len(data) {
+		t.Fatalf("Expected %d records, got %d", len(data), len(got))
+	}
+	for i := range data {
+		if got[i] != data[i] {
+			t.Errorf("Expected record %d to be %+v, got %+v", i, data[i], got[i])
+		}
+	}
+}
+
+func TestNewGobCollector_InvalidFlushInterval(t *testing.T) {
+	filename := "test_invalid_flush.gob"
+	defer os.Remove(filename)
+
+	if _, err := NewGobCollector[testCSVData](filename, 0); err == nil {
+		t.Fatal("Expected error for zero flush interval, got nil")
+	}
+	if _, err := NewGobCollector[testCSVData](filename, -time.Second); err == nil {
+		t.Fatal("Expected error for negative flush interval, got nil")
+	}
+}
+
+func TestGobCollector_GzipCollect(t *testing.T) {
+	filename := "test_collect.gob.gz"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 50*time.Millisecond, WithGobCollectorGzip(gzip.BestSpeed))
+	if err != nil {
+		t.Fatalf("Failed to create compressed gob collector: %v", err)
+	}
+
+	data := []testCSVData{
+		{ID: 1, Message: "test1", Value: 1.23},
+		{ID: 2, Message: "test2", Value: 4.56},
+	}
+	for _, item := range data {
+		collector.Collect(item)
+	}
+	collector.Close()
+
+	got := readGobRecords[testCSVData](t, filename, true)
+	if len(got) != len(data) {
+		t.Fatalf("Expected %d records, got %d", len(data), len(got))
+	}
+	for i := range data {
+		if got[i] != data[i] {
+			t.Errorf("Expected record %d to be %+v, got %+v", i, data[i], got[i])
+		}
+	}
+}
+
+func TestGobCollector_GzipNoCompressionCollect(t *testing.T) {
+	filename := "test_collect_no_compression.gob.gz"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 50*time.Millisecond, WithGobCollectorGzip(gzip.NoCompression))
+	if err != nil {
+		t.Fatalf("Failed to create uncompressed gzip gob collector: %v", err)
+	}
+
+	data := testCSVData{ID: 1, Message: "test1", Value: 1.23}
+	collector.Collect(data)
+	if err := collector.CloseAndErr(); err != nil {
+		t.Fatalf("Gob collector returned error: %v", err)
+	}
+
+	got := readGobRecords[testCSVData](t, filename, true)
+	if len(got) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(got))
+	}
+	if got[0] != data {
+		t.Errorf("Expected record to be %+v, got %+v", data, got[0])
+	}
+}
+
+func TestGobCollector_ConcurrentCollect(t *testing.T) {
+	filename := "test_concurrent.gob"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 50*time.Millisecond, WithGobCollectorBufferSize(16))
+	if err != nil {
+		t.Fatalf("Failed to create gob collector: %v", err)
+	}
+
+	const numGoroutines = 10
+	const itemsPerGoroutine = 9
+
+	var wg sync.WaitGroup
+	for i := range numGoroutines {
+		wg.Go(func() {
+			for j := range itemsPerGoroutine {
+				collector.Collect(testCSVData{
+					ID:      i*itemsPerGoroutine + j,
+					Message: "",
+					Value:   float64(i + j),
+				})
+			}
+		})
+	}
+	wg.Wait()
+	collector.Close()
+
+	got := readGobRecords[testCSVData](t, filename, false)
+	if len(got) != numGoroutines*itemsPerGoroutine {
+		t.Fatalf("Expected %d records, got %d", numGoroutines*itemsPerGoroutine, len(got))
+	}
+
+	foundIDs := make(map[int]bool)
+	for _, item := range got {
+		foundIDs[item.ID] = true
+	}
+	for i := range numGoroutines * itemsPerGoroutine {
+		if !foundIDs[i] {
+			t.Errorf("Missing ID %d in gob output", i)
+		}
+	}
+}
+
+func TestGobCollector_MultipleClose(t *testing.T) {
+	filename := "test_multiple_close.gob"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Failed to create gob collector: %v", err)
+	}
+
+	collector.Close()
+	collector.Close()
+	collector.Close()
+}
+
+func TestGobCollector_CollectAfterCloseDoesNotPanic(t *testing.T) {
+	filename := "test_collect_after_close.gob"
+	defer os.Remove(filename)
+
+	collector, err := NewGobCollector[testCSVData](filename, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Failed to create gob collector: %v", err)
+	}
+
+	collector.Close()
+	collector.Collect(testCSVData{ID: 1, Message: "late", Value: 1.0})
+
+	if err := collector.Err(); err == nil {
+		t.Fatal("Expected error after collecting on a closed collector, got nil")
+	}
+}
+
+func readGobRecords[R any](t *testing.T, filename string, compressed bool) []R {
+	t.Helper()
+
+	file, err := os.Open(filename)
+	if err != nil {
+		t.Fatalf("Failed to open gob file: %v", err)
+	}
+	defer file.Close()
+
+	var reader io.Reader = file
+	if compressed {
+		gzipReader, err := gzip.NewReader(file)
+		if err != nil {
+			t.Fatalf("Failed to open gzip reader: %v", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
+	decoder := gob.NewDecoder(reader)
+	var records []R
+	for {
+		var record R
+		err := decoder.Decode(&record)
+		if err == io.EOF {
+			return records
+		}
+		if err != nil {
+			t.Fatalf("Failed to decode gob record: %v", err)
+		}
+		records = append(records, record)
+	}
 }

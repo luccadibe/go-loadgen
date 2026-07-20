@@ -1,433 +1,223 @@
 package go_loadgen
 
 import (
+	"context"
+	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestNewWorkloadPatternGenerator(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:               "test",
-			PhaseCount:         IntRange{Min: 1, Max: 3},
-			ConstantLikelihood: 0.5,
-			RampingLikelihood:  0.5,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 1, Max: 10},
-				EndRPS:   IntRange{Min: 10, Max: 20},
-				Step:     IntRange{Min: 1, Max: 5},
-			},
-		},
-	}
+type testRequest struct{}
+type testResult struct{}
 
-	generator := NewWorkloadPatternGenerator(12345, 10*time.Second, patterns)
+type testProvider struct{}
 
-	if generator.seed != 12345 {
-		t.Errorf("Expected seed 12345, got: %d", generator.seed)
-	}
+func (testProvider) GetData() testRequest { return testRequest{} }
 
-	if generator.maxDuration != 10*time.Second {
-		t.Errorf("Expected maxDuration 10s, got: %v", generator.maxDuration)
-	}
+type testCollector struct{ count atomic.Uint64 }
 
-	if len(generator.patterns) != 1 {
-		t.Errorf("Expected 1 pattern, got: %d", len(generator.patterns))
-	}
-}
+func (c *testCollector) Collect(testResult) { c.count.Add(1) }
+func (*testCollector) Close()               {}
 
-func TestWorkloadPatternGenerator_GenerateWorkload_SinglePattern(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:               "test",
-			PhaseCount:         IntRange{Min: 2, Max: 2}, // Exactly 2 phases
-			ConstantLikelihood: 1.0,                      // Always constant
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 5, Max: 5},   // Exactly 5
-				EndRPS:   IntRange{Min: 10, Max: 10}, // Exactly 10
-				Step:     IntRange{Min: 1, Max: 1},   // Exactly 1
-			},
-		},
-	}
-
-	generator := NewWorkloadPatternGenerator(12345, 10*time.Second, patterns)
-	workload, err := generator.GenerateWorkload()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if len(workload) != 2 {
-		t.Errorf("Expected 2 phases, got: %d", len(workload))
-	}
-
-	// Check first phase
-	phase1 := workload[0]
-
-	if phase1.Type != "constant" {
-		t.Errorf("Expected type 'constant', got: %s", phase1.Type)
-	}
-	if phase1.StartTime != 0 {
-		t.Errorf("Expected StartTime 0, got: %v", phase1.StartTime)
-	}
-	if phase1.Duration != 5*time.Second { // 10s / 2 phases
-		t.Errorf("Expected Duration 5s, got: %v", phase1.Duration)
-	}
-	if phase1.StartRPS != 5 {
-		t.Errorf("Expected StartRPS 5, got: %d", phase1.StartRPS)
-	}
-
-	// Check second phase
-	phase2 := workload[1]
-	if phase2.StartTime != 5*time.Second {
-		t.Errorf("Expected StartTime 5s, got: %v", phase2.StartTime)
-	}
-	if phase2.Duration != 5*time.Second {
-		t.Errorf("Expected Duration 5s, got: %v", phase2.Duration)
-	}
-}
-
-func TestWorkloadPatternGenerator_GenerateWorkload_MultiplePatterns(t *testing.T) {
-	type expectedPhase struct {
-		Name      string
-		Duration  time.Duration
-		StartTime time.Duration
-	}
-	tests := []struct {
-		name        string
-		patterns    []*PhasePattern
-		maxDuration time.Duration
-		seed        int64
-		expected    []expectedPhase
-	}{
-		{
-			name: "two_patterns_one_phase_each",
-			patterns: []*PhasePattern{
-				{
-					Name:               "endpoint1",
-					PhaseCount:         IntRange{Min: 1, Max: 1},
-					ConstantLikelihood: 1.0,
-					RampingLikelihood:  0.0,
-					Parameters: PhaseParameters{
-						StartRPS: IntRange{Min: 1, Max: 1},
-						EndRPS:   IntRange{Min: 10, Max: 10},
-						Step:     IntRange{Min: 1, Max: 1},
-					},
-				},
-				{
-					Name:               "endpoint2",
-					PhaseCount:         IntRange{Min: 1, Max: 1},
-					ConstantLikelihood: 1.0,
-					RampingLikelihood:  0.0,
-					Parameters: PhaseParameters{
-						StartRPS: IntRange{Min: 2, Max: 2},
-						EndRPS:   IntRange{Min: 20, Max: 20},
-						Step:     IntRange{Min: 2, Max: 2},
-					},
-				},
-			},
-			maxDuration: 10 * time.Second,
-			seed:        12345,
-			expected: []expectedPhase{
-				{Name: "endpoint1_0", Duration: 5 * time.Second, StartTime: 0},
-				{Name: "endpoint2_0", Duration: 5 * time.Second, StartTime: 5 * time.Second},
-			},
-		},
-		{
-			name: "two_patterns_three_phases_each_variable",
-			patterns: []*PhasePattern{
-				{
-					Name:               "endpoint1",
-					PhaseCount:         IntRange{Min: 3, Max: 3},
-					ConstantLikelihood: 0.5,
-					RampingLikelihood:  0.5,
-					Parameters: PhaseParameters{
-						StartRPS: IntRange{Min: 1, Max: 1},
-						EndRPS:   IntRange{Min: 10, Max: 10},
-						Step:     IntRange{Min: 1, Max: 1},
-					},
-				},
-				{
-					Name:               "endpoint2",
-					PhaseCount:         IntRange{Min: 3, Max: 3},
-					ConstantLikelihood: 0.5,
-					RampingLikelihood:  0.5,
-					Parameters: PhaseParameters{
-						StartRPS: IntRange{Min: 2, Max: 2},
-						EndRPS:   IntRange{Min: 20, Max: 20},
-						Step:     IntRange{Min: 2, Max: 2},
-					},
-				},
-			},
-			maxDuration: 30 * time.Second,
-			seed:        12345,
-			expected: []expectedPhase{
-				// we expect 15 seconds each and evenly split between their three phases
-				{Name: "endpoint1_0", Duration: 5 * time.Second, StartTime: 0},
-				{Name: "endpoint1_1", Duration: 5 * time.Second, StartTime: 5 * time.Second},
-				{Name: "endpoint1_2", Duration: 5 * time.Second, StartTime: 10 * time.Second},
-				{Name: "endpoint2_0", Duration: 5 * time.Second, StartTime: 15 * time.Second},
-				{Name: "endpoint2_1", Duration: 5 * time.Second, StartTime: 20 * time.Second},
-				{Name: "endpoint2_2", Duration: 5 * time.Second, StartTime: 25 * time.Second},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			generator := NewWorkloadPatternGenerator(tt.seed, tt.maxDuration, tt.patterns)
-			workload, err := generator.GenerateWorkload()
-			if err != nil {
-				t.Fatalf("Expected no error, got: %v", err)
-			}
-
-			if len(workload) != len(tt.expected) {
-				t.Errorf("Expected %d phases, got: %d", len(tt.expected), len(workload))
-			}
-
-			actualPhases := make(map[string]TestPhase)
-			for _, phase := range workload {
-				actualPhases[phase.Name] = phase
-			}
-
-			for _, exp := range tt.expected {
-				phase, ok := actualPhases[exp.Name]
-				if !ok {
-					t.Errorf("Expected phase for %s", exp.Name)
-					continue
-				}
-				if phase.Duration != exp.Duration {
-					t.Errorf("Phase %s expected Duration %v, got: %v", exp.Name, exp.Duration, phase.Duration)
-				}
-				if phase.StartTime != exp.StartTime {
-					t.Errorf("Phase %s expected StartTime %v, got: %v", exp.Name, exp.StartTime, phase.StartTime)
-				}
-			}
-		})
-	}
-}
-
-func TestWorkloadPatternGenerator_GenerateWorkload_DeterministicOrder(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:               "first",
-			PhaseCount:         IntRange{Min: 1, Max: 1},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 1, Max: 1},
-				EndRPS:   IntRange{Min: 1, Max: 1},
-				Step:     IntRange{Min: 1, Max: 1},
-			},
-		},
-		{
-			Name:               "second",
-			PhaseCount:         IntRange{Min: 1, Max: 1},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 2, Max: 2},
-				EndRPS:   IntRange{Min: 2, Max: 2},
-				Step:     IntRange{Min: 1, Max: 1},
-			},
-		},
-	}
-
-	generator := NewWorkloadPatternGenerator(12345, 20*time.Second, patterns)
-	workload, err := generator.GenerateWorkload()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if len(workload) != 2 {
-		t.Errorf("Expected 2 phases, got: %d", len(workload))
-	}
-
-	// Check that phases are in the correct order
-	if workload[0].Name != "first_0" {
-		t.Errorf("Expected first phase to be 'first_0', got: %s", workload[0].Name)
-	}
-	if workload[1].Name != "second_0" {
-		t.Errorf("Expected second phase to be 'second_0', got: %s", workload[1].Name)
-	}
-
-	// Check that first phase starts at 0 and second phase starts after first ends
-	if workload[0].StartTime != 0 {
-		t.Errorf("Expected first phase to start at 0, got: %v", workload[0].StartTime)
-	}
-	expectedSecondStart := workload[0].Duration
-	if workload[1].StartTime != expectedSecondStart {
-		t.Errorf("Expected second phase to start at %v, got: %v", expectedSecondStart, workload[1].StartTime)
-	}
-}
-
-func TestWorkloadPatternGenerator_GenerateWorkload_WithWeights(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:               "heavy_load",
-			Weight:             0.7, // 70% of time
-			PhaseCount:         IntRange{Min: 2, Max: 2},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 10, Max: 10},
-				EndRPS:   IntRange{Min: 20, Max: 20},
-				Step:     IntRange{Min: 1, Max: 1},
-			},
-		},
-		{
-			Name:               "light_load",
-			Weight:             0.3, // 30% of time
-			PhaseCount:         IntRange{Min: 1, Max: 1},
-			ConstantLikelihood: 1.0,
-			RampingLikelihood:  0.0,
-			Parameters: PhaseParameters{
-				StartRPS: IntRange{Min: 1, Max: 1},
-				EndRPS:   IntRange{Min: 5, Max: 5},
-				Step:     IntRange{Min: 1, Max: 1},
-			},
-		},
-	}
-
-	generator := NewWorkloadPatternGenerator(12345, 100*time.Second, patterns)
-	workload, err := generator.GenerateWorkload()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if len(workload) != 3 { // 2 phases for heavy_load + 1 phase for light_load
-		t.Errorf("Expected 3 phases total, got: %d", len(workload))
-	}
-
-	// Check that heavy_load phases take up 70% of the time
-	heavyLoadDuration := time.Duration(0)
-	lightLoadDuration := time.Duration(0)
-
-	for _, phase := range workload {
-		if phase.Name == "heavy_load_0" || phase.Name == "heavy_load_1" {
-			heavyLoadDuration += phase.Duration
-		} else if phase.Name == "light_load_0" {
-			lightLoadDuration += phase.Duration
+func TestRunDrainsRequestsAfterSchedulingEnds(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := testClient(func(context.Context, testRequest) testResult {
+		select {
+		case <-started:
+		default:
+			close(started)
 		}
-	}
+		<-release
+		return testResult{}
+	})
+	workload := mustWorkload(t, Spec{
+		Duration:  time.Second,
+		Endpoints: map[string]Endpoint{"one": mustEndpoint(t, client, testProvider{}, &testCollector{})},
+		Phases:    []Phase{{Duration: 10 * time.Millisecond, RPS: 1000, Targets: []Target{{Endpoint: "one", Weight: 1}}}},
+	})
 
-	expectedHeavyDuration := 70 * time.Second
-	expectedLightDuration := 30 * time.Second
-
-	if heavyLoadDuration != expectedHeavyDuration {
-		t.Errorf("Expected heavy_load duration %v, got: %v", expectedHeavyDuration, heavyLoadDuration)
+	done := make(chan Report, 1)
+	go func() { done <- workload.Run(context.Background()) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("workload never issued a request")
 	}
-	if lightLoadDuration != expectedLightDuration {
-		t.Errorf("Expected light_load duration %v, got: %v", expectedLightDuration, lightLoadDuration)
+	select {
+	case <-done:
+		t.Fatal("run returned before its issued request completed")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	report := <-done
+	if report.Issued == 0 || report.Completed != report.Issued {
+		t.Fatalf("issued=%d completed=%d, want all issued requests drained", report.Issued, report.Completed)
+	}
+	if report.DrainTimedOut {
+		t.Fatal("default drain must not time out")
 	}
 }
 
-func TestWorkloadPatternGenerator_CalculatePatternTimes_EqualWeights(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:   "pattern1",
-			Weight: 0.0, // No weight specified
-		},
-		{
-			Name:   "pattern2",
-			Weight: 0.0, // No weight specified
-		},
-		{
-			Name:   "pattern3",
-			Weight: 0.0, // No weight specified
-		},
-	}
-
-	generator := NewWorkloadPatternGenerator(12345, 30*time.Second, patterns)
-	err := generator.calculatePatternTimes()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	// Should split evenly between 3 patterns
-	expectedTime := 10 * time.Second
-	for _, pattern := range generator.patterns {
-		if pattern.totalTime != expectedTime {
-			t.Errorf("Pattern %s expected totalTime %v, got: %v", pattern.Name, expectedTime, pattern.totalTime)
+func TestRunCancelsRequestsAfterDrainTimeout(t *testing.T) {
+	cancelled := make(chan struct{})
+	client := testClient(func(ctx context.Context, _ testRequest) testResult {
+		<-ctx.Done()
+		select {
+		case <-cancelled:
+		default:
+			close(cancelled)
 		}
+		return testResult{}
+	})
+	workload := mustWorkload(t, Spec{
+		Duration:     time.Second,
+		DrainTimeout: 20 * time.Millisecond,
+		Endpoints:    map[string]Endpoint{"one": mustEndpoint(t, client, testProvider{}, &testCollector{})},
+		Phases:       []Phase{{Duration: 5 * time.Millisecond, RPS: 1000, Targets: []Target{{Endpoint: "one", Weight: 1}}}},
+	})
+
+	report := workload.Run(context.Background())
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("drain timeout did not cancel outstanding requests")
+	}
+	if !report.DrainTimedOut || report.Completed != report.Issued {
+		t.Fatalf("timeout=%t issued=%d completed=%d", report.DrainTimedOut, report.Issued, report.Completed)
 	}
 }
 
-func TestWorkloadPatternGenerator_CalculatePatternTimes_CustomWeights(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:   "pattern1",
-			Weight: 0.5, // 50% of time
-		},
-		{
-			Name:   "pattern2",
-			Weight: 0.3, // 30% of time
-		},
-		{
-			Name:   "pattern3",
-			Weight: 0.2, // 20% of time
-		},
-	}
+func TestMaxInFlightDropsWithoutDelayingSchedule(t *testing.T) {
+	release := make(chan struct{})
+	client := testClient(func(context.Context, testRequest) testResult {
+		<-release
+		return testResult{}
+	})
+	workload := mustWorkload(t, Spec{
+		Duration:    time.Second,
+		MaxInFlight: 2,
+		Endpoints:   map[string]Endpoint{"one": mustEndpoint(t, client, testProvider{}, &testCollector{})},
+		Phases:      []Phase{{Duration: 10 * time.Millisecond, RPS: 10_000, Targets: []Target{{Endpoint: "one", Weight: 1}}}},
+	})
 
-	generator := NewWorkloadPatternGenerator(12345, 100*time.Second, patterns)
-	err := generator.calculatePatternTimes()
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(release)
+	}()
+	report := workload.Run(context.Background())
+	if report.PeakInFlight != 2 || report.Issued != 2 || report.Dropped == 0 {
+		t.Fatalf("peak=%d issued=%d dropped=%d, want capped open-loop issuance", report.PeakInFlight, report.Issued, report.Dropped)
+	}
+}
+
+func TestAliasChooserRespectsWeights(t *testing.T) {
+	first := &countingEndpoint{}
+	second := &countingEndpoint{}
+	chooser, err := newAliasChooser([]Endpoint{first, second}, []uint32{80, 20})
 	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
+		t.Fatal(err)
 	}
-
-	expectedTimes := map[string]time.Duration{
-		"pattern1": 50 * time.Second, // 50%
-		"pattern2": 30 * time.Second, // 30%
-		"pattern3": 20 * time.Second, // 20%
+	random := phaseRandom{state: 1}
+	const samples = 1_000_000
+	for range samples {
+		chooser.choose(&random).execute(context.Background())
 	}
-
-	for _, pattern := range generator.patterns {
-		expected := expectedTimes[pattern.Name]
-		if pattern.totalTime != expected {
-			t.Errorf("Pattern %s expected totalTime %v, got: %v", pattern.Name, expected, pattern.totalTime)
-		}
+	firstCount := first.count.Load()
+	if firstCount < 795_000 || firstCount > 805_000 {
+		t.Fatalf("first endpoint received %d/%d, want approximately 80%%", firstCount, samples)
 	}
 }
 
-func TestWorkloadPatternGenerator_CalculatePatternTimes_InvalidWeights(t *testing.T) {
-	patterns := []*PhasePattern{
-		{
-			Name:   "pattern1",
-			Weight: 0.5,
-		},
-		{
-			Name:   "pattern2",
-			Weight: 0.3,
-		},
-		{
-			Name:   "pattern3",
-			Weight: 0.1, // Total is 0.9, not 1.0
-		},
-	}
-
-	generator := NewWorkloadPatternGenerator(12345, 100*time.Second, patterns)
-	err := generator.calculatePatternTimes()
+func TestNewWorkloadRejectsInvalidDefinitions(t *testing.T) {
+	_, err := NewWorkload(Spec{Duration: time.Second, Endpoints: map[string]Endpoint{"one": &countingEndpoint{}}, Phases: []Phase{{Duration: time.Second, RPS: 1, Targets: []Target{{Endpoint: "missing", Weight: 1}}}}})
 	if err == nil {
-		t.Error("Expected error for weights that don't sum to 1.0")
-	}
-	if err.Error() != "pattern weights must sum to 1.0" {
-		t.Errorf("Expected specific error message, got: %v", err)
+		t.Fatal("expected unknown endpoint validation failure")
 	}
 }
 
-func TestWorkloadPatternGenerator_EmptyPatterns(t *testing.T) {
-	patterns := []*PhasePattern{}
+func TestNewEndpointRejectsTypedNilDependency(t *testing.T) {
+	var client *nilTestClient
+	endpoint, err := NewEndpoint[testRequest, testResult](client, testProvider{}, &testCollector{})
+	if err == nil || endpoint != nil {
+		t.Fatalf("endpoint=%v err=%v, want typed nil rejection", endpoint, err)
+	}
+}
 
-	generator := NewWorkloadPatternGenerator(12345, 100*time.Second, patterns)
-	err := generator.calculatePatternTimes()
-	if err != nil {
-		t.Errorf("Expected no error for empty patterns, got: %v", err)
+func TestCompiledRampDoesNotRetainCallerPointer(t *testing.T) {
+	ramp := &Ramp{To: 100, Step: 10, Every: time.Second}
+	workload := mustWorkload(t, Spec{
+		Duration:  2 * time.Second,
+		Endpoints: map[string]Endpoint{"one": &countingEndpoint{}},
+		Phases:    []Phase{{Duration: 2 * time.Second, RPS: 10, Ramp: ramp, Targets: []Target{{Endpoint: "one", Weight: 1}}}},
+	})
+	ramp.To = 1_000_000
+	if got := workload.phases[0].rateAt(time.Second); got != 20 {
+		t.Fatalf("compiled ramp rate=%d, want 20 after caller mutation", got)
+	}
+}
+
+func TestRateAtAndHighRateBatchingDoNotOverflow(t *testing.T) {
+	phase := compiledPhase{phase: Phase{RPS: math.MaxUint64 - 10, Ramp: &Ramp{To: math.MaxUint64, Step: 10, Every: time.Second}}}
+	if got := phase.rateAt(2 * time.Second); got != math.MaxUint64 {
+		t.Fatalf("ramp-up rate=%d, want %d", got, uint64(math.MaxUint64))
+	}
+	phase.phase = Phase{RPS: math.MaxUint64, Ramp: &Ramp{To: 1, Step: 10, Every: time.Second}}
+	if got := phase.rateAt(2 * time.Second); got != math.MaxUint64-20 {
+		t.Fatalf("ramp-down rate=%d, want %d", got, uint64(math.MaxUint64-20))
 	}
 
-	workload, err := generator.GenerateWorkload()
+	var remainder uint64
+	first := arrivalsForInterval(math.MaxUint64, time.Millisecond, &remainder)
+	second := arrivalsForInterval(math.MaxUint64, time.Millisecond, &remainder)
+	if first == 0 || second == 0 || remainder >= 1000 {
+		t.Fatalf("invalid high-rate batches: first=%d second=%d remainder=%d", first, second, remainder)
+	}
+}
+
+func TestRunWithCancelledContextDoesNotIssueRequests(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	workload := mustWorkload(t, Spec{
+		Duration:  time.Second,
+		Endpoints: map[string]Endpoint{"one": &countingEndpoint{}},
+		Phases:    []Phase{{Duration: time.Second, RPS: 1000, Targets: []Target{{Endpoint: "one", Weight: 1}}}},
+	})
+	report := workload.Run(ctx)
+	if report.Issued != 0 || report.Completed != 0 {
+		t.Fatalf("issued=%d completed=%d after cancellation", report.Issued, report.Completed)
+	}
+}
+
+type testClient func(context.Context, testRequest) testResult
+
+func (f testClient) CallEndpoint(ctx context.Context, request testRequest) testResult {
+	return f(ctx, request)
+}
+
+type nilTestClient struct{}
+
+func (*nilTestClient) CallEndpoint(context.Context, testRequest) testResult { return testResult{} }
+
+type countingEndpoint struct{ count atomic.Uint64 }
+
+func (e *countingEndpoint) execute(context.Context) { e.count.Add(1) }
+
+func mustWorkload(t *testing.T, spec Spec) *Workload {
+	t.Helper()
+	workload, err := NewWorkload(spec)
 	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
+		t.Fatal(err)
 	}
-	if len(workload) != 0 {
-		t.Errorf("Expected empty workload, got: %d phases", len(workload))
+	return workload
+}
+
+func mustEndpoint[C any, R any](t testing.TB, client Client[C, R], provider DataProvider[C], collector Collector[R]) Endpoint {
+	t.Helper()
+	endpoint, err := NewEndpoint(client, provider, collector)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return endpoint
 }

@@ -44,7 +44,12 @@ func (c *simpleClient) CallEndpoint(ctx context.Context, req endpointRequest) en
 	if err != nil {
 		return endpointResponse{Error: err.Error()}
 	}
-	resp, err := http.Post("http://localhost:8080/increment", "application/json", bytes.NewBuffer(body))
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost:8080/increment", bytes.NewBuffer(body))
+	if err != nil {
+		return endpointResponse{Error: err.Error()}
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpRequest)
 	if err != nil {
 		return endpointResponse{Error: err.Error()}
 	}
@@ -69,79 +74,37 @@ func main() {
 	}
 	defer collector.Close()
 
-	genericRunner, err := go_loadgen.NewEndpointWorkload(
-		"increment",
-		&go_loadgen.Config{
-			GenerateWorkload: false,
-			MaxDuration:      20 * time.Second,
-			Phases: []go_loadgen.TestPhase{
-				{
-					Name:      "increment",
-					Type:      "constant",
-					StartTime: 0,
-					Duration:  10 * time.Second,
-					StartRPS:  1,
-					Step:      1,
-				},
-				{
-					Name:      "increment",
-					Type:      "variable",
-					StartTime: 10 * time.Second,
-					Duration:  10 * time.Second,
-					StartRPS:  10,
-					EndRPS:    100,
-					Step:      10,
-				},
+	endpoint, err := go_loadgen.NewEndpoint(&simpleClient{}, &simpleDataProvider{}, collector)
+	if err != nil {
+		fmt.Println("Error creating endpoint:", err)
+		return
+	}
+	workload, err := go_loadgen.NewWorkload(go_loadgen.Spec{
+		Duration: 20 * time.Second,
+		Endpoints: map[string]go_loadgen.Endpoint{
+			"increment": endpoint,
+		},
+		Phases: []go_loadgen.Phase{
+			{
+				Duration: 10 * time.Second,
+				RPS:      10,
+				Targets:  []go_loadgen.Target{{Endpoint: "increment", Weight: 1}},
+			},
+			{
+				StartAt:  10 * time.Second,
+				Duration: 10 * time.Second,
+				RPS:      10,
+				Ramp:     &go_loadgen.Ramp{To: 100, Step: 10, Every: time.Second},
+				Targets:  []go_loadgen.Target{{Endpoint: "increment", Weight: 1}},
 			},
 		},
-		&simpleClient{},
-		&simpleDataProvider{},
-		collector,
-	)
+	})
 
 	if err != nil {
-		fmt.Println("Error creating genericRunner:", err)
+		fmt.Println("Error creating workload:", err)
 		return
 	}
 
-	genericRunner.Run()
-
-	fmt.Println("Finished running genericRunner in", time.Since(startTime))
-
-	// with workload generation
-
-	startTime = time.Now()
-
-	genericRunner2, err := go_loadgen.NewEndpointWorkload(
-		"increment",
-		&go_loadgen.Config{
-			GenerateWorkload: true,
-			MaxDuration:      20 * time.Second,
-			Patterns: []*go_loadgen.PhasePattern{
-				{
-					Name:               "/increment",
-					PhaseCount:         go_loadgen.IntRange{Min: 1, Max: 10},
-					ConstantLikelihood: 0.5,
-					RampingLikelihood:  0.5,
-					Parameters: go_loadgen.PhaseParameters{
-						StartRPS: go_loadgen.IntRange{Min: 1, Max: 10},
-						EndRPS:   go_loadgen.IntRange{Min: 20, Max: 30},
-						Step:     go_loadgen.IntRange{Min: 1, Max: 10},
-					},
-				},
-			},
-		},
-		&simpleClient{},
-		&simpleDataProvider{},
-		collector,
-	)
-
-	if err != nil {
-		fmt.Println("Error creating genericRunner2:", err)
-		return
-	}
-
-	genericRunner2.Run()
-
-	fmt.Println("Finished running genericRunner2 in", time.Since(startTime))
+	report := workload.Run(context.Background())
+	fmt.Printf("Finished workload in %s: %+v\n", time.Since(startTime), report)
 }
