@@ -1,0 +1,18 @@
+version: 2
+
+project_name: go-loadgen
+
+builds:
+  - skip: true
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  github:
+    owner: luccadibe
+    name: go-loadgen
+  name_template: "v{{.Version}}"
+  draft: false
+  prerelease: auto
